@@ -55,7 +55,12 @@ def backup(p):
         raise SystemExit('Backup existente: renomeie-o antes de executar novo backup')
     with conn_for(p) as source, sqlite3.connect(target) as target_db:
         source.backup(target_db)
-    print('Backup completo:',target, 'sha256:',hashlib.sha256(target.read_bytes()).hexdigest())
+    digest=hashlib.sha256(target.read_bytes()).hexdigest()  
+    meta={'source':str(p),'backup':str(target),'sha256':digest,'created_at_utc':datetime.now(timezone.utc).isoformat(),'sqlite_version':sqlite3.sqlite_version}  
+    target.with_suffix(target.suffix+'.sha256').write_text(digest+'  '+target.name+'\n',encoding='utf-8')  
+    import json  
+    target.with_suffix(target.suffix+'.metadata.json').write_text(json.dumps(meta,ensure_ascii=False,indent=2),encoding='utf-8')  
+    print('Backup completo:',target, 'sha256:',digest)
 
 
 def restore(p):
@@ -85,14 +90,16 @@ def migrate(p):
                 db.execute('COMMIT');print('Migração já aplicada; sem alterações');return
             db.execute("""CREATE TABLE IF NOT EXISTS inventory_movements(
               id INTEGER PRIMARY KEY,
-              product_id INTEGER NOT NULL REFERENCES products(id),
+              product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
               delta_qty INTEGER NOT NULL CHECK(delta_qty <> 0),
               movement_type TEXT NOT NULL CHECK(movement_type IN ('OPENING','SALE','ADJUSTMENT','RETURN')),
-              order_id TEXT REFERENCES orders(id),
-              reason TEXT NOT NULL,
+              order_id TEXT REFERENCES orders(id) ON DELETE RESTRICT,
+              reason TEXT NOT NULL CHECK(length(trim(reason)) >= 5),
               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-              UNIQUE(order_id, product_id, movement_type)
+              CHECK((movement_type='SALE' AND order_id IS NOT NULL) OR movement_type IN ('OPENING','ADJUSTMENT','RETURN'))
             )""")
+            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_opening_product ON inventory_movements(product_id) WHERE movement_type='OPENING'")  
+            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_sale_order_product ON inventory_movements(order_id,product_id) WHERE movement_type='SALE'")  
             db.execute('CREATE INDEX IF NOT EXISTS ix_compat_bike ON compatibility(bike_id,product_id)')
             db.execute('CREATE INDEX IF NOT EXISTS ix_products_category ON products(category,id)')
             db.execute('CREATE INDEX IF NOT EXISTS ix_movements_product ON inventory_movements(product_id,id)')
@@ -132,7 +139,8 @@ def verify(p):
           FROM products p LEFT JOIN inventory_movements m ON m.product_id=p.id
           GROUP BY p.id HAVING p.stock<>COALESCE(SUM(m.delta_qty),0)""").fetchall()
         print('SQLite:',sqlite3.sqlite_version,'integrity:',valid,'FK violations:',len(fk),'ledger discrepancies:',len(rows))
-        for row in rows:print(dict(row))
+        for row in rows[:20]:print(dict(row))  
+        if len(rows)>20: print('... demais divergências:',len(rows)-20)
         if valid!='ok' or fk or rows:raise SystemExit(2)
     print('PASS: conciliação e integridade. Este PASS não prova integração com API/CLI.')
 
