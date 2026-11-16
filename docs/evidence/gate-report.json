@@ -1,6 +1,6 @@
 {
   "kind": "REA gate report",
-  "date_utc": "2026-11-16T11:53:12.729088+00:00",
+  "date_utc": "2026-11-16T12:30:04.439688+00:00",
   "checks": [
     {
       "command": "/home/chroma/Área de trabalho/rea-motopecas-antigravity/.venv/bin/python -m compileall -q app",
